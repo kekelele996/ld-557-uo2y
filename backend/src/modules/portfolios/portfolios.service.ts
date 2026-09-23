@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PortfolioType, RiskLevel, UserRole } from '../../constants/enums';
 import { ROLE_LIMITS } from '../../constants/permissions';
 import { CurrentUser } from '../../types/request';
@@ -12,6 +12,9 @@ export interface PortfolioRecord {
   description: string;
   type: PortfolioType;
   riskLevel: RiskLevel;
+  cash: number;
+  realizedPnl: number;
+  /** 总市值，仅统计持仓市值，不含现金 */
   totalValue: number;
   createdAt: string;
 }
@@ -19,7 +22,8 @@ export interface PortfolioRecord {
 @Injectable()
 export class PortfoliosService {
   private readonly portfolios: PortfolioRecord[] = [
-    { id: 1, userId: 1, name: '长期价值组合', description: '宽基 ETF + 龙头股票', type: PortfolioType.MIXED, riskLevel: RiskLevel.MODERATE, totalValue: 3000, createdAt: new Date().toISOString() },
+    // 初始现金 10000，种子交易买入 10 股 AAPL @180 手续费 1，现金余额 8199
+    { id: 1, userId: 1, name: '长期价值组合', description: '宽基 ETF + 龙头股票', type: PortfolioType.MIXED, riskLevel: RiskLevel.MODERATE, cash: 8199, realizedPnl: 0, totalValue: 3000, createdAt: new Date().toISOString() },
   ];
   private nextId = 2;
 
@@ -34,6 +38,11 @@ export class PortfoliosService {
     return portfolio;
   }
 
+  /** 组合详情：回读现金、持仓市值（totalValue，仅统计持仓）和累计已实现盈亏 */
+  detail(id: number, user: CurrentUser) {
+    return this.findOwned(id, user);
+  }
+
   create(dto: CreatePortfolioDto, user: CurrentUser) {
     const ownedCount = this.portfolios.filter((item) => item.userId === user.id).length;
     if (ownedCount >= ROLE_LIMITS[user.role].maxPortfolios) throw new ForbiddenException('portfolio limit reached');
@@ -45,6 +54,8 @@ export class PortfoliosService {
       description: dto.description ?? '',
       type: dto.type,
       riskLevel: dto.riskLevel,
+      cash: dto.initialCash ?? 0,
+      realizedPnl: 0,
       totalValue: 0,
       createdAt: new Date().toISOString(),
     };
@@ -68,6 +79,31 @@ export class PortfoliosService {
   setTotalValue(id: number, value: number) {
     const portfolio = this.portfolios.find((item) => item.id === id);
     if (portfolio) portfolio.totalValue = Number(value.toFixed(2));
+  }
+
+  /** 买入扣款前校验现金是否充足，不足则抛错，组合状态不变 */
+  assertSufficientCash(id: number, amount: number) {
+    const portfolio = this.portfolios.find((item) => item.id === id);
+    if (!portfolio) throw new NotFoundException('portfolio not found');
+    if (portfolio.cash < amount) {
+      throw new BadRequestException(`insufficient cash: need ${amount.toFixed(2)}, available ${portfolio.cash.toFixed(2)}`);
+    }
+  }
+
+  /** 现金入账/扣款，delta 为正入账、为负扣款 */
+  applyCashDelta(id: number, delta: number) {
+    const portfolio = this.portfolios.find((item) => item.id === id);
+    if (!portfolio) throw new NotFoundException('portfolio not found');
+    portfolio.cash = Number((portfolio.cash + delta).toFixed(2));
+    return portfolio;
+  }
+
+  /** 卖出结转后累计已实现盈亏 */
+  addRealizedPnl(id: number, pnl: number) {
+    const portfolio = this.portfolios.find((item) => item.id === id);
+    if (!portfolio) throw new NotFoundException('portfolio not found');
+    portfolio.realizedPnl = Number((portfolio.realizedPnl + pnl).toFixed(2));
+    return portfolio;
   }
 
   performance(id: number, user: CurrentUser) {

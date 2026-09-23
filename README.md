@@ -106,7 +106,10 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:38505/api/portfolios
 
 curl -X POST http://localhost:38505/api/portfolios \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"指数增强","type":"MIXED","riskLevel":"MODERATE"}'
+  -d '{"name":"指数增强","type":"MIXED","riskLevel":"MODERATE","initialCash":100000}'
+
+# 组合详情回读现金、持仓市值（totalValue，仅统计持仓）和累计已实现盈亏
+curl -H "Authorization: Bearer $TOKEN" http://localhost:38505/api/portfolios/1
 
 curl -X POST http://localhost:38505/api/holdings/1/transactions \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \

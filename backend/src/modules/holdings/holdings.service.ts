@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { CurrentUser } from '../../types/request';
 import { CreateHoldingDto } from './dto/create-holding.dto';
 import { MarketService } from '../market/market.service';
@@ -71,7 +71,10 @@ export class HoldingsService {
       holding.quantity = newQuantity;
     }
     if (type === 'SELL') {
-      holding.quantity = Math.max(0, holding.quantity - quantity);
+      if (quantity > holding.quantity) {
+        throw new BadRequestException(`insufficient quantity to sell: hold ${holding.quantity}, sell ${quantity}`);
+      }
+      holding.quantity -= quantity;
     }
     this.revalue(holding);
     this.recomputePortfolioValue(holding.portfolioId);
