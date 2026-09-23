@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { CurrentUser } from '../../types/request';
 import { CreateHoldingDto } from './dto/create-holding.dto';
 import { MarketService } from '../market/market.service';
@@ -63,19 +63,28 @@ export class HoldingsService {
     return { deleted: true, id };
   }
 
-  applyTransaction(holdingId: number, quantity: number, price: number, type: 'BUY' | 'SELL' | 'DIVIDEND', user: CurrentUser) {
+  /**
+   * 交易落账到持仓：买入重算均价，卖出按平均成本结转已实现盈亏。
+   * 返回本次卖出结转的已实现盈亏（非卖出为 0）。
+   */
+  applyTransaction(holdingId: number, quantity: number, price: number, fee: number, type: 'BUY' | 'SELL' | 'DIVIDEND', user: CurrentUser) {
     const holding = this.findOwned(holdingId, user);
+    let realizedPnl = 0;
     if (type === 'BUY') {
       const newQuantity = holding.quantity + quantity;
       holding.avgCost = ((holding.avgCost * holding.quantity) + (price * quantity)) / newQuantity;
       holding.quantity = newQuantity;
     }
     if (type === 'SELL') {
-      holding.quantity = Math.max(0, holding.quantity - quantity);
+      if (quantity > holding.quantity) {
+        throw new BadRequestException(`insufficient quantity: sell ${quantity}, holding ${holding.quantity}`);
+      }
+      realizedPnl = Number(((price - holding.avgCost) * quantity - fee).toFixed(2));
+      holding.quantity = Number((holding.quantity - quantity).toFixed(6));
     }
     this.revalue(holding);
     this.recomputePortfolioValue(holding.portfolioId);
-    return holding;
+    return { holding, realizedPnl };
   }
 
   private revalueAll(items: HoldingRecord[]) {

@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PortfolioType, RiskLevel, UserRole } from '../../constants/enums';
 import { ROLE_LIMITS } from '../../constants/permissions';
 import { CurrentUser } from '../../types/request';
@@ -12,6 +12,9 @@ export interface PortfolioRecord {
   description: string;
   type: PortfolioType;
   riskLevel: RiskLevel;
+  initialCash: number;
+  cash: number;
+  realizedPnl: number;
   totalValue: number;
   createdAt: string;
 }
@@ -19,12 +22,14 @@ export interface PortfolioRecord {
 @Injectable()
 export class PortfoliosService {
   private readonly portfolios: PortfolioRecord[] = [
-    { id: 1, userId: 1, name: '长期价值组合', description: '宽基 ETF + 龙头股票', type: PortfolioType.MIXED, riskLevel: RiskLevel.MODERATE, totalValue: 3000, createdAt: new Date().toISOString() },
+    // 初始现金 10000，种子交易买入 10 股 AAPL @180 手续费 1，故现金 10000 - 1801 = 8199
+    { id: 1, userId: 1, name: '长期价值组合', description: '宽基 ETF + 龙头股票', type: PortfolioType.MIXED, riskLevel: RiskLevel.MODERATE, initialCash: 10000, cash: 8199, realizedPnl: 0, totalValue: 1952, createdAt: new Date().toISOString() },
   ];
   private nextId = 2;
 
   list(user: CurrentUser) {
-    return user.role === UserRole.ADMIN ? this.portfolios : this.portfolios.filter((item) => item.userId === user.id);
+    const items = user.role === UserRole.ADMIN ? this.portfolios : this.portfolios.filter((item) => item.userId === user.id);
+    return items.map((item) => this.toDetail(item));
   }
 
   findOwned(id: number, user: CurrentUser) {
@@ -34,10 +39,15 @@ export class PortfoliosService {
     return portfolio;
   }
 
+  detail(id: number, user: CurrentUser) {
+    return this.toDetail(this.findOwned(id, user));
+  }
+
   create(dto: CreatePortfolioDto, user: CurrentUser) {
     const ownedCount = this.portfolios.filter((item) => item.userId === user.id).length;
     if (ownedCount >= ROLE_LIMITS[user.role].maxPortfolios) throw new ForbiddenException('portfolio limit reached');
 
+    const initialCash = Number((dto.initialCash ?? 0).toFixed(2));
     const portfolio: PortfolioRecord = {
       id: this.nextId++,
       userId: user.id,
@@ -45,17 +55,20 @@ export class PortfoliosService {
       description: dto.description ?? '',
       type: dto.type,
       riskLevel: dto.riskLevel,
+      initialCash,
+      cash: initialCash,
+      realizedPnl: 0,
       totalValue: 0,
       createdAt: new Date().toISOString(),
     };
     this.portfolios.push(portfolio);
-    return portfolio;
+    return this.toDetail(portfolio);
   }
 
   update(id: number, dto: UpdatePortfolioDto, user: CurrentUser) {
     const portfolio = this.findOwned(id, user);
     Object.assign(portfolio, dto);
-    return portfolio;
+    return this.toDetail(portfolio);
   }
 
   delete(id: number, user: CurrentUser) {
@@ -70,11 +83,36 @@ export class PortfoliosService {
     if (portfolio) portfolio.totalValue = Number(value.toFixed(2));
   }
 
+  /** 买入扣款：成交额 + 手续费。现金不足时抛错，调用方保证不做任何变更 */
+  debitForBuy(portfolioId: number, cost: number) {
+    const portfolio = this.requireById(portfolioId);
+    const amount = Number(cost.toFixed(2));
+    if (portfolio.cash < amount) {
+      throw new BadRequestException(`insufficient cash: need ${amount}, available ${portfolio.cash}`);
+    }
+    portfolio.cash = Number((portfolio.cash - amount).toFixed(2));
+  }
+
+  /** 卖出入账：净额（成交额 - 手续费）计入现金，同时累计已实现盈亏 */
+  creditForSell(portfolioId: number, netAmount: number, realizedPnl: number) {
+    const portfolio = this.requireById(portfolioId);
+    portfolio.cash = Number((portfolio.cash + netAmount).toFixed(2));
+    portfolio.realizedPnl = Number((portfolio.realizedPnl + realizedPnl).toFixed(2));
+  }
+
+  /** 分红入账：增加现金，不影响已实现盈亏 */
+  creditForDividend(portfolioId: number, amount: number) {
+    const portfolio = this.requireById(portfolioId);
+    portfolio.cash = Number((portfolio.cash + amount).toFixed(2));
+  }
+
   performance(id: number, user: CurrentUser) {
     const portfolio = this.findOwned(id, user);
     return {
       portfolioId: portfolio.id,
+      cash: portfolio.cash,
       totalValue: portfolio.totalValue,
+      realizedPnl: portfolio.realizedPnl,
       daily: 0.38,
       weekly: 1.24,
       monthly: 3.9,
@@ -82,5 +120,18 @@ export class PortfoliosService {
       points: ['日', '周', '月', '年'].map((label, index) => ({ label, returnPercent: [0.38, 1.24, 3.9, 12.6][index] })),
     };
   }
-}
 
+  private requireById(id: number) {
+    const portfolio = this.portfolios.find((item) => item.id === id);
+    if (!portfolio) throw new NotFoundException('portfolio not found');
+    return portfolio;
+  }
+
+  /** 组合详情回读：现金、持仓市值、累计已实现盈亏；总市值只统计持仓 */
+  private toDetail(portfolio: PortfolioRecord) {
+    return {
+      ...portfolio,
+      holdingsValue: portfolio.totalValue,
+    };
+  }
+}

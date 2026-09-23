@@ -6,7 +6,7 @@ export const seedData = {
     { id: 2, email: 'admin@finance.local', name: 'Admin', role: UserRole.ADMIN },
   ],
   portfolios: [
-    { id: 1, userId: 1, name: '长期价值组合', type: PortfolioType.MIXED, riskLevel: RiskLevel.MODERATE },
+    { id: 1, userId: 1, name: '长期价值组合', type: PortfolioType.MIXED, riskLevel: RiskLevel.MODERATE, initialCash: 10000 },
   ],
   transactions: [
     { holdingId: 1, type: TransactionType.BUY, quantity: 10, price: 180 },

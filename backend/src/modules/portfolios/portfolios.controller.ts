@@ -21,7 +21,7 @@ export class PortfoliosController {
 
   @Get(':id')
   detail(@Param('id', ParseIntPipe) id: number, @CurrentUserDecorator() user: CurrentUser) {
-    return this.portfoliosService.findOwned(id, user);
+    return this.portfoliosService.detail(id, user);
   }
 
   @Post()

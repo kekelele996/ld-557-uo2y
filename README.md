@@ -18,6 +18,25 @@ npm run start:dev
 
 FinanceAPI 是面向个人投资者的纯后端 API 服务，覆盖投资组合、持仓、交易记录、市场行情与复盘日志。项目采用 NestJS + TypeORM 分层结构，保留 PostgreSQL/Redis/JWT/Docker Compose 部署配置，并提供可直接烟测的内存数据实现。
 
+## 组合现金账
+
+每个组合维护一条现金账，买卖分红一目了然：
+
+- **创建组合**时可填写 `initialCash`（默认 0），创建后不可修改；`cash` 从初始资金起记。
+- **买入**：按 `成交额 + 手续费`（`quantity × price + fee`）扣减现金；现金不足返回 400，交易记录与持仓均不变。
+- **卖出**：按平均成本结转已实现盈亏 `realizedPnl = (price − avgCost) × quantity − fee`，净额（`quantity × price − fee`）计入现金；卖出数量超过持仓返回 400，交易记录与持仓均不变。
+- **分红**：按 `quantity × price` 增加现金，不影响持仓数量、成本与已实现盈亏。
+- **组合详情**（`GET /api/portfolios/:id`）回读 `cash`（当前现金）、`initialCash`、`holdingsValue`（持仓市值）、`realizedPnl`（累计已实现盈亏）与 `totalValue`；`totalValue` 只统计持仓市值，不含现金。
+
+```json
+{
+  "id": 1, "name": "长期价值组合", "type": "MIXED", "riskLevel": "MODERATE",
+  "initialCash": 10000, "cash": 8199, "realizedPnl": 0,
+  "holdingsValue": 1952, "totalValue": 1952
+}
+```
+
+
 ## 技术栈
 
 | 分类 | 技术 |
@@ -40,7 +59,7 @@ FinanceAPI 是面向个人投资者的纯后端 API 服务，覆盖投资组合�
 | Auth | POST | `/api/auth/refresh` | 刷新 token |
 | Auth | GET | `/api/auth/profile` | 当前用户 |
 | Portfolio | GET/POST | `/api/portfolios` | 列表、创建 |
-| Portfolio | GET/PUT/DELETE | `/api/portfolios/:id` | 详情、编辑、删除 |
+| Portfolio | GET/PUT/DELETE | `/api/portfolios/:id` | 详情（含现金、持仓市值、已实现盈亏）、编辑、删除 |
 | Portfolio | GET | `/api/portfolios/:id/performance` | 收益统计 |
 | Holding | GET/POST | `/api/portfolios/:portfolioId/holdings` | 组合持仓 |
 | Holding | GET/DELETE | `/api/holdings/:id` | 持仓详情、删除 |
@@ -106,11 +125,19 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:38505/api/portfolios
 
 curl -X POST http://localhost:38505/api/portfolios \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"指数增强","type":"MIXED","riskLevel":"MODERATE"}'
+  -d '{"name":"指数增强","type":"MIXED","riskLevel":"MODERATE","initialCash":10000}'
 
 curl -X POST http://localhost:38505/api/holdings/1/transactions \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"type":"BUY","quantity":2,"price":190,"fee":1}'
+
+# 卖出：按平均成本结转已实现盈亏，净额入账
+curl -X POST http://localhost:38505/api/holdings/1/transactions \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"type":"SELL","quantity":1,"price":200,"fee":1}'
+
+# 组合详情：回读 cash / holdingsValue / realizedPnl / totalValue
+curl -H "Authorization: Bearer $TOKEN" http://localhost:38505/api/portfolios/1
 
 curl -H "Authorization: Bearer $TOKEN" http://localhost:38505/api/market/quote/AAPL
 ```
